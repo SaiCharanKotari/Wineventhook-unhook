@@ -1,0 +1,153 @@
+#include <windows.h>
+#include <setupapi.h>
+#include <devguid.h>
+#include <devpkey.h>
+#include <stdio.h>
+#include "MinHook.h"
+
+// Define our own DEVPROPKEY to avoid missing definitions in MinGW
+const DEVPROPKEY MY_DEVPKEY_Device_RemovalPolicy = { { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 35 };
+
+// For DEVPROPKEY comparison
+
+
+// Function pointers
+typedef BOOL (WINAPI* SetupDiGetDeviceRegistryPropertyW_t)(HDEVINFO, PSP_DEVINFO_DATA, DWORD, PDWORD, PBYTE, DWORD, PDWORD);
+typedef BOOL (WINAPI* SetupDiGetDeviceRegistryPropertyA_t)(HDEVINFO, PSP_DEVINFO_DATA, DWORD, PDWORD, PBYTE, DWORD, PDWORD);
+typedef BOOL (WINAPI* SetupDiGetDevicePropertyW_t)(HDEVINFO, PSP_DEVINFO_DATA, const DEVPROPKEY*, DEVPROPTYPE*, PBYTE, DWORD, PDWORD, DWORD);
+typedef BOOL (WINAPI* SetupDiGetDevicePropertyA_t)(HDEVINFO, PSP_DEVINFO_DATA, const DEVPROPKEY*, DEVPROPTYPE*, PBYTE, DWORD, PDWORD, DWORD);
+
+SetupDiGetDeviceRegistryPropertyW_t orig_SetupDiGetDeviceRegistryPropertyW = NULL;
+SetupDiGetDeviceRegistryPropertyA_t orig_SetupDiGetDeviceRegistryPropertyA = NULL;
+SetupDiGetDevicePropertyW_t orig_SetupDiGetDevicePropertyW = NULL;
+SetupDiGetDevicePropertyA_t orig_SetupDiGetDevicePropertyA = NULL;
+
+void LogA(const char* format, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    OutputDebugStringA(buf);
+}
+
+BOOL WINAPI Hook_SetupDiGetDeviceRegistryPropertyW(HDEVINFO a1, PSP_DEVINFO_DATA a2, DWORD prop, PDWORD a4, PBYTE buf, DWORD size, PDWORD reqSize) {
+    BOOL res = orig_SetupDiGetDeviceRegistryPropertyW(a1, a2, prop, a4, buf, size, reqSize);
+    LogA("[HOOK] SetupDiGetDeviceRegistryPropertyW queried property: %lu", prop);
+    
+    if (res && prop == SPDRP_REMOVAL_POLICY && buf && size >= sizeof(DWORD)) {
+        DWORD* val = (DWORD*)buf;
+        LogA("[HOOK] SetupDiGetDeviceRegistryPropertyW SPDRP_REMOVAL_POLICY original: %lu", *val);
+        if (*val == 3 || *val == 2) {
+            *val = 1;
+            LogA("[HOOK] SetupDiGetDeviceRegistryPropertyW spoofed to: 1");
+        }
+    }
+    return res;
+}
+
+BOOL WINAPI Hook_SetupDiGetDeviceRegistryPropertyA(HDEVINFO a1, PSP_DEVINFO_DATA a2, DWORD prop, PDWORD a4, PBYTE buf, DWORD size, PDWORD reqSize) {
+    BOOL res = orig_SetupDiGetDeviceRegistryPropertyA(a1, a2, prop, a4, buf, size, reqSize);
+    LogA("[HOOK] SetupDiGetDeviceRegistryPropertyA queried property: %lu", prop);
+    
+    if (res && prop == SPDRP_REMOVAL_POLICY && buf && size >= sizeof(DWORD)) {
+        DWORD* val = (DWORD*)buf;
+        LogA("[HOOK] SetupDiGetDeviceRegistryPropertyA SPDRP_REMOVAL_POLICY original: %lu", *val);
+        if (*val == 3 || *val == 2) {
+            *val = 1;
+            LogA("[HOOK] SetupDiGetDeviceRegistryPropertyA spoofed to: 1");
+        }
+    }
+    return res;
+}
+
+BOOL WINAPI Hook_SetupDiGetDevicePropertyW(HDEVINFO a1, PSP_DEVINFO_DATA a2, const DEVPROPKEY* propKey, DEVPROPTYPE* propType, PBYTE buf, DWORD size, PDWORD reqSize, DWORD flags) {
+    BOOL res = orig_SetupDiGetDevicePropertyW(a1, a2, propKey, propType, buf, size, reqSize, flags);
+    if (propKey) {
+        LogA("[HOOK] SetupDiGetDevicePropertyW queried DEVPROPKEY: {%08lX-...} PID: %lu", propKey->fmtid.Data1, propKey->pid);
+        
+        if (res && IsEqualDevPropKey(*propKey, MY_DEVPKEY_Device_RemovalPolicy) && buf && size >= sizeof(DWORD)) {
+            DWORD* val = (DWORD*)buf;
+            LogA("[HOOK] SetupDiGetDevicePropertyW DEVPKEY_Device_RemovalPolicy original: %lu", *val);
+            if (*val == 3 || *val == 2) {
+                *val = 1;
+                LogA("[HOOK] SetupDiGetDevicePropertyW spoofed to: 1");
+            }
+        }
+    }
+    return res;
+}
+
+BOOL WINAPI Hook_SetupDiGetDevicePropertyA(HDEVINFO a1, PSP_DEVINFO_DATA a2, const DEVPROPKEY* propKey, DEVPROPTYPE* propType, PBYTE buf, DWORD size, PDWORD reqSize, DWORD flags) {
+    BOOL res = orig_SetupDiGetDevicePropertyA(a1, a2, propKey, propType, buf, size, reqSize, flags);
+    if (propKey) {
+        LogA("[HOOK] SetupDiGetDevicePropertyA queried DEVPROPKEY: {%08lX-...} PID: %lu", propKey->fmtid.Data1, propKey->pid);
+        
+        if (res && IsEqualDevPropKey(*propKey, MY_DEVPKEY_Device_RemovalPolicy) && buf && size >= sizeof(DWORD)) {
+            DWORD* val = (DWORD*)buf;
+            LogA("[HOOK] SetupDiGetDevicePropertyA DEVPKEY_Device_RemovalPolicy original: %lu", *val);
+            if (*val == 3 || *val == 2) {
+                *val = 1;
+                LogA("[HOOK] SetupDiGetDevicePropertyA spoofed to: 1");
+            }
+        }
+    }
+    return res;
+}
+
+void SetupHooks() {
+    if (MH_Initialize() != MH_OK) {
+        LogA("[HOOK] MH_Initialize failed");
+        return;
+    }
+
+    HMODULE hSetupApi = GetModuleHandleW(L"setupapi.dll");
+    if (!hSetupApi) hSetupApi = LoadLibraryW(L"setupapi.dll");
+
+    if (hSetupApi) {
+        void* pW = (void*)GetProcAddress(hSetupApi, "SetupDiGetDeviceRegistryPropertyW");
+        if (pW) {
+            MH_CreateHook(pW, (LPVOID)&Hook_SetupDiGetDeviceRegistryPropertyW, (LPVOID*)&orig_SetupDiGetDeviceRegistryPropertyW);
+            MH_EnableHook(pW);
+        }
+        
+        void* pA = (void*)GetProcAddress(hSetupApi, "SetupDiGetDeviceRegistryPropertyA");
+        if (pA) {
+            MH_CreateHook(pA, (LPVOID)&Hook_SetupDiGetDeviceRegistryPropertyA, (LPVOID*)&orig_SetupDiGetDeviceRegistryPropertyA);
+            MH_EnableHook(pA);
+        }
+
+        void* pPropW = (void*)GetProcAddress(hSetupApi, "SetupDiGetDevicePropertyW");
+        if (pPropW) {
+            MH_CreateHook(pPropW, (LPVOID)&Hook_SetupDiGetDevicePropertyW, (LPVOID*)&orig_SetupDiGetDevicePropertyW);
+            MH_EnableHook(pPropW);
+        }
+
+        void* pPropA = (void*)GetProcAddress(hSetupApi, "SetupDiGetDevicePropertyA");
+        if (pPropA) {
+            MH_CreateHook(pPropA, (LPVOID)&Hook_SetupDiGetDevicePropertyA, (LPVOID*)&orig_SetupDiGetDevicePropertyA);
+            MH_EnableHook(pPropA);
+        }
+        LogA("[HOOK] SetupAPI hooks installed");
+    } else {
+        LogA("[HOOK] Failed to load setupapi.dll");
+    }
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    switch (ul_reason_for_call) {
+    case DLL_PROCESS_ATTACH:
+        DisableThreadLibraryCalls(hModule);
+        LogA("[HOOK] DLL_PROCESS_ATTACH - camera_info.dll loaded");
+        SetupHooks();
+        break;
+
+    case DLL_PROCESS_DETACH:
+        MH_DisableHook(MH_ALL_HOOKS);
+        MH_Uninitialize();
+        LogA("[HOOK] DLL_PROCESS_DETACH - camera_info.dll unloaded");
+        break;
+    }
+    return TRUE;
+}
+
